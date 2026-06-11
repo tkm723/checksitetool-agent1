@@ -79,10 +79,33 @@ st.caption("既存サイト・構築サイトを比較し、NG・要手動確認
 with st.sidebar:
     st.header("⚙️ 検品設定")
 
-    existing_url = st.text_input(
-        "既存サイトURL（正解データ）",
-        placeholder="https://www.example.com",
+    site_mode = st.radio(
+        "案件タイプ",
+        ["既存サイトあり", "新規案件（既存サイトなし）"],
+        horizontal=True,
     )
+
+    existing_url = ""
+    manual_info  = {}
+
+    if site_mode == "既存サイトあり":
+        existing_url = st.text_input(
+            "既存サイトURL（正解データ）",
+            placeholder="https://www.example.com",
+        )
+    else:
+        st.caption("📋 基本情報を入力してください")
+        manual_info = {
+            "tel":          st.text_input("電話番号",         placeholder="03-1234-5678"),
+            "fax":          st.text_input("FAX番号",          placeholder="03-1234-5679"),
+            "clinic_name":  st.text_input("院名",             placeholder="〇〇クリニック"),
+            "director":     st.text_input("院長名",           placeholder="山田 太郎"),
+            "hours":        st.text_area ("診療時間",         placeholder="月〜金 9:00〜18:00\n土 9:00〜13:00", height=80),
+            "closed":       st.text_input("休診日",           placeholder="日・祝"),
+            "address":      st.text_input("郵便番号・住所",   placeholder="〒123-4567 東京都〇〇区..."),
+            "station":      st.text_input("最寄り駅・所要時間", placeholder="〇〇駅 徒歩5分"),
+        }
+
     target_url = st.text_input(
         "構築サイトURL（チェック対象）",
         placeholder="https://staging.example.com",
@@ -131,7 +154,9 @@ with st.sidebar:
         "▶ 検品実行",
         type="primary",
         use_container_width=True,
-        disabled=not (existing_url.strip() and target_url.strip()),
+        disabled=not target_url.strip() or (
+            site_mode == "既存サイトあり" and not existing_url.strip()
+        ),
     )
 
     st.divider()
@@ -174,7 +199,7 @@ def _fetch_existing(url: str):
 
 if run_btn:
     # バリデーション
-    if not existing_url.startswith("http"):
+    if site_mode == "既存サイトあり" and not existing_url.startswith("http"):
         st.error("既存サイトURLは http(s):// から始めてください")
         st.stop()
     if not target_url.startswith("http"):
@@ -212,12 +237,16 @@ if run_btn:
         st.write(f"✅ 巡回完了 — **{len(crawler.pages)} ページ**")
 
         # ── 既存サイト取得 ─────────────────────────────────────────────────
-        st.write(f"🔍 既存サイト取得中: **{e_url}**")
-        existing_soup, fetch_err = _fetch_existing(e_url)
-        if fetch_err:
-            st.warning(f"⚠️ 既存サイト取得エラー: {fetch_err}")
+        existing_soup = None
+        if site_mode == "既存サイトあり":
+            st.write(f"🔍 既存サイト取得中: **{e_url}**")
+            existing_soup, fetch_err = _fetch_existing(e_url)
+            if fetch_err:
+                st.warning(f"⚠️ 既存サイト取得エラー: {fetch_err}")
+            else:
+                st.write("✅ 既存サイト取得完了")
         else:
-            st.write("✅ 既存サイト取得完了")
+            st.write("📋 新規案件モード — 手動入力の基本情報で照合します")
 
         # ── ワイヤーフレーム保存 ───────────────────────────────────────────
         wire_path = None
@@ -238,7 +267,7 @@ if run_btn:
             log_area.caption(f"チェック中: `{ppath}`")
 
             results = ck.run_checks(
-                url, page_data, bpath, existing_soup, llm_client, model
+                url, page_data, bpath, existing_soup, llm_client, model, manual_info
             )
             all_results[url] = results
 

@@ -674,6 +674,88 @@ def check_basic_info_py(t_soup: BeautifulSoup, e_soup: BeautifulSoup) -> list:
 
     return results
 
+# ── Check 15b: 基本情報照合（手動入力版・新規案件用）────────────────────────────
+
+def check_basic_info_manual(t_soup: BeautifulSoup, manual_info: dict) -> list:
+    """手動入力された基本情報がターゲットサイトに存在するか照合する（既存サイトなし案件用）"""
+    results = []
+    text = t_soup.get_text(' ', strip=True)
+
+    # 電話番号
+    if manual_info.get('tel'):
+        tel_norm = normalize_phone(manual_info['tel'])
+        page_phones = set()
+        for a in t_soup.find_all('a', href=re.compile(r'^tel:')):
+            page_phones.add(normalize_phone(a['href'].replace('tel:', '')))
+        for m in PHONE_RE.finditer(text):
+            page_phones.add(normalize_phone(m.group()))
+        page_phones.discard('')
+        if tel_norm and tel_norm not in page_phones:
+            results.append(ng('基本情報照合', f'指定の電話番号が見つからない: {manual_info["tel"]}',
+                              existing=manual_info['tel'],
+                              detected=str(sorted(page_phones)) if page_phones else '（なし）'))
+
+    # FAX番号
+    if manual_info.get('fax'):
+        fax_norm = re.sub(r'[^\d]', '', manual_info['fax'])
+        if fax_norm and fax_norm not in re.sub(r'[^\d]', '', text):
+            results.append(warn('基本情報照合', f'FAX番号が見つからない可能性: {manual_info["fax"]}',
+                                existing=manual_info['fax']))
+
+    # 院名
+    if manual_info.get('clinic_name'):
+        name = manual_info['clinic_name'].strip()
+        if name and name not in text:
+            results.append(ng('基本情報照合', f'院名が見つからない: 「{name}」',
+                              existing=name))
+
+    # 院長名
+    if manual_info.get('director'):
+        director = manual_info['director'].strip()
+        if director and director not in text:
+            results.append(ng('基本情報照合', f'院長名が見つからない: 「{director}」',
+                              existing=director))
+
+    # 診療時間（時刻形式の有無で確認）
+    if manual_info.get('hours'):
+        if not re.search(r'\d{1,2}[:：]\d{2}', text):
+            results.append(warn('基本情報照合', '診療時間の記載が見つからない可能性があります',
+                                existing=manual_info['hours']))
+
+    # 休診日
+    if manual_info.get('closed'):
+        closed = manual_info['closed'].strip()
+        if closed and closed not in text:
+            results.append(warn('基本情報照合', f'休診日の記載が確認できません: 「{closed}」',
+                                existing=closed))
+
+    # 郵便番号・住所
+    if manual_info.get('address'):
+        address = manual_info['address'].strip()
+        postal_m = re.search(r'[〒]?\d{3}[-－]?\d{4}', address)
+        if postal_m:
+            postal = re.sub(r'[^0-9]', '', postal_m.group())
+            if postal and postal not in re.sub(r'[^0-9]', '', text):
+                results.append(ng('基本情報照合', f'郵便番号が見つからない: {postal_m.group()}',
+                                  existing=address))
+        else:
+            addr_part = re.sub(r'^〒?\d{3}[-－]?\d{4}\s*', '', address).strip()[:10]
+            if addr_part and addr_part not in text:
+                results.append(warn('基本情報照合', '住所の記載が確認できません',
+                                    existing=address))
+
+    # 最寄り駅
+    if manual_info.get('station'):
+        station = manual_info['station'].strip()
+        station_m = re.search(r'[\w぀-鿿]+駅', station)
+        station_name = station_m.group() if station_m else station
+        if station_name and station_name not in text:
+            results.append(warn('基本情報照合', f'最寄り駅の記載が確認できません: 「{station_name}」',
+                                existing=station))
+
+    return results
+
+
 # ── Check 16: Meta tags ───────────────────────────────────────────────────────
 
 def check_meta_tags(soup: BeautifulSoup) -> list:
@@ -883,7 +965,8 @@ def _dedup_merge(py_results: list, llm_results: list) -> list:
 # ── Per-page check runner ─────────────────────────────────────────────────────
 
 def run_checks(url: str, page_data: dict, base_path: str,
-               existing_soup=None, llm_client=None, model=DEFAULT_MODEL) -> list:
+               existing_soup=None, llm_client=None, model=DEFAULT_MODEL,
+               manual_info=None) -> list:
     soup = page_data.get('soup')
     if not soup:
         return [ng('クロール', f'ページ取得失敗 (status={page_data.get("status","?")})', '')]
@@ -924,8 +1007,11 @@ def run_checks(url: str, page_data: dict, base_path: str,
         results += check_ad_guideline_py(soup, path)
 
     # ─ チェック15: Python（TEL/コピーライト/ナビ）────────────────────────────
-    if is_top(path) and existing_soup:
-        results += check_basic_info_py(soup, existing_soup)
+    if is_top(path):
+        if existing_soup:
+            results += check_basic_info_py(soup, existing_soup)
+        elif manual_info:
+            results += check_basic_info_manual(soup, manual_info)
 
     # ─ チェック16〜17 + 手動（トップページのみ）─────────────────────────────
     if is_top(path):
